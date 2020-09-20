@@ -22,6 +22,7 @@ class EncoderCNN(nn.Module):
         features = self.embed(features)
         return features
     
+# ATTENTION
 class BahdanauAttention(nn.Module):
     """
     Bahdanau Attention.
@@ -52,24 +53,24 @@ class BahdanauAttention(nn.Module):
         :return: attention weighted encoding, weights
         """
         att1 = self.encoder_att(encoder_out)  # (batch_size, attention_dim)
-        print('encoder_out: ', encoder_out.shape)
-        print('att1 -> (batch_size, attention_dim): ', att1.shape)
+        #print('encoder_out: ', encoder_out.shape)
+        #print('att1 -> (batch_size, attention_dim): ', att1.shape)
         att2 = self.decoder_att(decoder_hidden)  # (batch_size, attention_dim)
-        print('decoder_hidden: ', decoder_hidden.shape)
-        print('att2 -> (batch_size, attention_dim): ', att2.shape)
+        #print('decoder_hidden: ', decoder_hidden.shape)
+        #print('att2 -> (batch_size, attention_dim): ', att2.shape)
         #att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)  # (batch_size, num_pixels)
         att = self.full_att(self.tanh(att1 + att2))  # (batch_size, num_pixels)
-        print('att -> (batch_size, num_pixels): ', att.shape)
+        #print('att -> (batch_size, num_pixels): ', att.shape)
         alpha = self.softmax(att)  # (batch_size, num_pixels)
-        print('alpha -> (batch_size, num_pixels): ', alpha.shape)
+        #print('alpha -> (batch_size, num_pixels): ', alpha.shape)
         attention_weighted_encoding = (encoder_out * alpha.unsqueeze(2)).sum(dim=1)  # (batch_size, encoder_dim)
-        print('attention_weighted_encoding -> (batch_size, encoder_dim): ', attention_weighted_encoding.shape)
+        #print('attention_weighted_encoding -> (batch_size, encoder_dim): ', attention_weighted_encoding.shape)
 
         return attention_weighted_encoding, alpha
 
     
 class DecoderRNN(nn.Module):
-    def __init__(self, embed_size, decoder_size, vocab_size, attention_size=512, encoder_size=512, dropout=0.5):
+    def __init__(self, embed_size, decoder_size, vocab_size, attention_size=512, encoder_size=512, dropout=0.25):
         '''
         [See the diagram of the decoder in Notebook 1]
         The RNN needs to have 4 basic components :
@@ -112,18 +113,30 @@ class DecoderRNN(nn.Module):
         
         Other parameters were not changed from default values provided in the PyTorch implementation.
         '''
-        print('embed_size: ', embed_size)
-        print('encoder_size: ', encoder_size)
-        print('decoder_size: ', decoder_size)
-        self.lstm_layer = nn.LSTM( input_size = embed_size+encoder_size, 
+        #print('embed_size: ', embed_size)
+        #print('encoder_size: ', encoder_size)
+        #print('decoder_size: ', decoder_size)
+        
+        # https://pytorch.org/docs/stable/generated/torch.nn.LSTMCell.html
+        self.lstm_layer = nn.LSTMCell( input_size = embed_size+encoder_size, 
                              hidden_size = decoder_size, 
+                             bias=True)
                              #num_layers = num_layers, 
                              #dropout = dropout, 
-                             batch_first=True )
+                             #batch_first=True )
 
         self.init_h_layer = nn.Linear(encoder_size, decoder_size)  # linear layer to find initial hidden state of LSTMCell
         self.init_c_layer = nn.Linear(encoder_size, decoder_size)  # linear layer to find initial cell state of LSTMCell
         self.linear_fc_layer = nn.Linear(decoder_size, vocab_size)  # linear layer to find scores over vocabulary
+        self.init_weights()  # initialize some layers with the uniform distribution
+
+    def init_weights(self):
+        """
+        Initializes some parameters with values from the uniform distribution, for easier convergence.
+        """
+        self.embedding_layer.weight.data.uniform_(-0.1, 0.1)
+        self.linear_fc_layer.bias.data.fill_(0)
+        self.linear_fc_layer.weight.data.uniform_(-0.1, 0.1)
 
 
     def init_decoder_state(self, encoder_out):
@@ -133,7 +146,7 @@ class DecoderRNN(nn.Module):
         :return: hidden state, cell state
         """
         #print('encoder_out: ', encoder_out)
-        print('encoder_out.shape: ', encoder_out.shape)
+        #print('encoder_out.shape: ', encoder_out.shape)
         #mean_encoder_out = encoder_out.mean(dim=0) # TODO: DA SISTEMARE
         #print('mean_encoder_out: ', mean_encoder_out)
         #print('mean_encoder_out.shape: ', mean_encoder_out.shape)
@@ -158,17 +171,17 @@ class DecoderRNN(nn.Module):
         batch_size = encoder_out.size(0)
         encoder_dim = encoder_out.size(-1)
         vocab_size = self.vocab_size
-        print ('batch_size: ', batch_size)
-        print ('encoder_out.shape: ', encoder_out.shape)
-        print ('encoder_dim: ', encoder_dim)
-        print ('vocab_size: ', vocab_size)
-        print ('captions.shape: ', captions.shape)
+        #print ('batch_size: ', batch_size)
+        #print ('encoder_out.shape: ', encoder_out.shape)
+        #print ('encoder_dim: ', encoder_dim)
+        #print ('vocab_size: ', vocab_size)
+        #print ('captions.shape: ', captions.shape)
 
         # Flatten image
         #encoder_out = encoder_out.view(batch_size, -1, encoder_dim)  # (batch_size, num_pixels, encoder_dim)
         #num_pixels = encoder_out.size(1)
         #print('num_pixels: ', num_pixels)
-        print('encoder_out -> (batch_size, encoder_dim): ', encoder_out.shape)
+        #print('encoder_out -> (batch_size, encoder_dim): ', encoder_out.shape)
         
         # Discard the <end> word to avoid the following error in Notebook 1 : Step 4
         # (outputs.shape[1]==captions.shape[1]) condition won't be satisfied otherwise.
@@ -179,65 +192,68 @@ class DecoderRNN(nn.Module):
         captions_length_list = [captions_length for i in range(captions.shape[0])]
         caption_lengths, sort_ind = torch.FloatTensor(captions_length_list).sort(dim=0, descending=True)
         caption_lengths = (caption_lengths).tolist()
-        print('caption_lengths: ',caption_lengths)
+        #print('caption_lengths: ',caption_lengths)
         
         # Pass image captions through the word_embeddings layer.
         # output shape : (batch_size, caption length , embed_size)
         embeddings = self.embedding_layer(captions) # (batch_size, max_caption_length, embed_dim)
-        print ('embeddings -> (batch_size, max_caption_length, embed_dim): ', embeddings.shape)
+        #print ('embeddings -> (batch_size, max_caption_length, embed_dim): ', embeddings.shape)
 
         # Initialize LSTM state
         #h, c = self.init_decoder_state(encoder_out)  # (batch_size, decoder_dim)
         h, c = self.init_decoder_state(encoder_out)  # (batch_size, decoder_dim)
-        print('h.shape -> (batch_size, decoder_dim): ',h.shape)
-        print('c.shape -> (batch_size, decoder_dim): ',c.shape)
+        #print('h.shape -> (batch_size, decoder_dim): ',h.shape)
+        #print('c.shape -> (batch_size, decoder_dim): ',c.shape)
 
         # Create tensors to hold word predicion scores and alphas
         predictions = torch.zeros(batch_size, int(max(caption_lengths)), vocab_size).to(device)
         alphas = torch.zeros(batch_size, int(max(caption_lengths))).to(device)
-        print('predictions.shape: ', predictions.shape)
-        print('alphas.shape: ', alphas.shape)
+        #print('predictions.shape: ', predictions.shape)
+        #print('alphas.shape: ', alphas.shape)
 
         # At each time-step, decode by
         # attention-weighing the encoder's output based on the decoder's previous hidden state output
         # then generate a new word in the decoder with the previous word and the attention weighted encoding
         for t in range(int(max(caption_lengths))):
             batch_size_t = sum([l > t for l in caption_lengths])
-            print('Ciclo For nro: ', t)
-            print('batch_size_t: ', batch_size_t)
+            #print('Ciclo For nro: ', t)
+            #print('batch_size_t: ', batch_size_t)
             attention_weighted_encoding, alpha = self.attention_layer(encoder_out, h)
 
             #gate = self.sigmoid(self.f_beta(h[:batch_size_t]))  # gating scalar, (batch_size_t, encoder_dim)
             #attention_weighted_encoding = gate * attention_weighted_encoding
 
-            print('attention_weighted_encoding.shape: ', attention_weighted_encoding.shape)
-            print('alpha.shape: ', alpha.shape)
+            #print('attention_weighted_encoding.shape: ', attention_weighted_encoding.shape)
+            #print('alpha.shape: ', alpha.shape)
             #print('embeddings[:, t, :].shape: ', embeddings[:, t, :].shape)
-            print('embeddings.shape: ', embeddings.shape)
-            print('h.shape: ', h.shape)
-            print('c.shape: ', c.shape)
+            #print('embeddings.shape: ', embeddings.shape)
+            #print('h.shape: ', h.shape)
+            #print('c.shape: ', c.shape)
             #print('embeddings[:, t, :] + attention_weighted_encoding: ', torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).shape)
-            print('embeddings + attention_weighted_encoding: ', torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).unsqueeze(1).shape)
+            #print('embeddings + attention_weighted_encoding: ', torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).shape)
 
             # TODO: problema con c, viene creato come torch.Size([10, 512]) e poi diventa tupla dopo questa chiamata 
-            x, (h, c) = self.lstm_layer(torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).unsqueeze(1), (h.unsqueeze(0), c.unsqueeze(0)))  # (batch_size_t, decoder_dim)
-            print('x.shape: ', x.shape)
-            print('h.shape: ', h.shape)
-            print('c.shape: ', c.shape)
+            #x, (h, c) = self.lstm_layer(torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).unsqueeze(1), (h.unsqueeze(0), c.unsqueeze(0)))  # (batch_size_t, decoder_dim)
+            h, c = self.lstm_layer(torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1), (h, c))  # (batch_size_t, decoder_dim)
+            #print('x.shape: ', x.shape)
+            #print('h.shape: ', h.shape)
+            #print('c.shape: ', c.shape)
             h = h.squeeze()
             c = c.squeeze()
-            print('h.shape: ', h.shape)
-            print('c.shape: ', c.shape)
+            #print('h.shape: ', h.shape)
+            #print('c.shape: ', c.shape)
             #print('c: ', c)
 
-            preds = self.linear_fc_layer(x)  # (batch_size_t, vocab_size)
+            preds = self.linear_fc_layer(h)  # (batch_size_t, vocab_size)
+            #print('preds.shape: ', preds.shape)
+            #print('alpha.shape: ', alpha.shape)
             #preds = self.fc(self.dropout(h))  # (batch_size_t, vocab_size)
             #predictions[:batch_size_t, t, :] = preds
             #alphas[:batch_size_t, t, :] = alpha
-            predictions[:batch_size_t, t, :] = preds.squeeze()
-            alphas[:batch_size_t, t] = alpha.squeeze()
-            print('predictions.shape: ', predictions.shape)
-            print('alphas.shape: ', alphas.shape)
+            predictions[:, t, :] = preds
+            alphas[:, t] = alpha.squeeze()
+            #print('predictions.shape: ', predictions.shape)
+            #print('alphas.shape: ', alphas.shape)
         
         return predictions #, captions, captions_length_list, alphas
 
