@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 import torchvision
+import torch.nn.functional as F
 
 # ATTENTION
 class EncoderCNN(nn.Module):
@@ -52,6 +53,10 @@ class BahdanauAttention(nn.Module):
         :param decoder_hidden: previous decoder output, a tensor of dimension (batch_size, decoder_dim)
         :return: attention weighted encoding, weights
         """
+        #print('encoder_out.shape: ', encoder_out.shape)
+        #print('decoder_hidden.shape: ', decoder_hidden.shape)
+        #print('encoder_out: ', encoder_out)
+        #print('decoder_hidden: ', decoder_hidden)
         att1 = self.encoder_att(encoder_out)  # (batch_size, attention_dim)
         #print('encoder_out: ', encoder_out.shape)
         #print('att1 -> (batch_size, attention_dim): ', att1.shape)
@@ -124,6 +129,9 @@ class DecoderRNN(nn.Module):
                              #num_layers = num_layers, 
                              #dropout = dropout, 
                              #batch_first=True )
+        
+        self.f_beta = nn.Linear(decoder_size, encoder_size)  # linear layer to create a sigmoid-activated gate
+        self.sigmoid = nn.Sigmoid()
 
         self.init_h_layer = nn.Linear(encoder_size, decoder_size)  # linear layer to find initial hidden state of LSTMCell
         self.init_c_layer = nn.Linear(encoder_size, decoder_size)  # linear layer to find initial cell state of LSTMCell
@@ -231,7 +239,10 @@ class DecoderRNN(nn.Module):
             #print('c.shape: ', c.shape)
             #print('embeddings[:, t, :] + attention_weighted_encoding: ', torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).shape)
             #print('embeddings + attention_weighted_encoding: ', torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).shape)
-
+            
+            gate = self.sigmoid(self.f_beta(h))  # gating scalar, (batch_size_t, encoder_dim)
+            attention_weighted_encoding = gate * attention_weighted_encoding
+            
             # TODO: problema con c, viene creato come torch.Size([10, 512]) e poi diventa tupla dopo questa chiamata 
             #x, (h, c) = self.lstm_layer(torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1).unsqueeze(1), (h.unsqueeze(0), c.unsqueeze(0)))  # (batch_size_t, decoder_dim)
             h, c = self.lstm_layer(torch.cat([embeddings[:, t, :], attention_weighted_encoding], dim=1), (h, c))  # (batch_size_t, decoder_dim)
@@ -260,3 +271,163 @@ class DecoderRNN(nn.Module):
     def sample(self, inputs, states=None, max_len=20):
         " accepts pre-processed image tensor (inputs) and returns predicted sentence (list of tensor ids of length max_len) "
         pass
+
+
+    def beam_search_predictions(self, encoder_out, decoder, device, vocab, beam_index = 3, max_len=20):
+        word_start = vocab.start_word
+        word_end = vocab.end_word
+        start = vocab(word_start)
+        end = vocab(word_end)
+        #print('start: ', start)
+        #print('end: ', end)
+        vocab_size = len(vocab)
+
+        # We'll treat the problem as having a batch size of beam_index
+        #print('encoder_out.shape: ', encoder_out.shape)
+        enc_image_size = encoder_out.size(1)
+        #print('enc_image_size: ', enc_image_size)
+        encoder_dim = encoder_out.size(2)
+        #print('encoder_dim: ', encoder_dim)
+        encoder_out_new = encoder_out.expand(beam_index, 1, encoder_dim)  # (beam_index, encoder_dim)
+        print('encoder_out.shape: ', encoder_out.shape)
+
+        # Tensor to store top beam_index sequences' scores; now they're just 0
+        top_beam_index_scores = torch.zeros(beam_index, 1).to(device)  # (beam_index, 1)
+
+        # Tensor to store top beam_index previous words at each step; now they're just <start>
+        beam_index_prev_words = torch.LongTensor([[start]] * beam_index).to(device)  # (beam_index, 1)
+        print('beam_index_prev_words.shape: ', beam_index_prev_words.shape)
+        
+        # Tensor to store top k sequences; now they're just <start>
+        seqs = beam_index_prev_words  # (beam_index, 1)
+        # Tensor to store top k sequences' alphas; now they're just 1s
+        #seqs_alpha = torch.ones(beam_index, 1, enc_image_size, enc_image_size).to(device)  # (beam_index, 1, enc_image_size, enc_image_size)
+
+        # Lists to store completed sequences, their alphas and scores
+        complete_seqs = list()
+        #complete_seqs_alpha = list()
+        complete_seqs_scores = list()
+    
+        # Start decoding
+        step = 1
+        ## Inizialize the Hodden and Cell State
+        h, c = decoder.init_decoder_state(encoder_out_new)
+        h = h.squeeze()
+        c = c.squeeze()
+
+        while True:
+            print('step: ', step)
+            print('encoder_out_new.shape: ', encoder_out_new.shape)
+            print('h.shape: ', h.shape)
+            print('encoder_out_new min: ', encoder_out_new.min())
+            print('encoder_out_new max: ', encoder_out_new.max())
+            print('h min: ', h.min())
+            print('h max: ', h.max())
+            embeddings = decoder.embedding_layer(beam_index_prev_words).squeeze(1) # (beam_index, embed_dim)
+            attention_weighted_encoding, alpha = decoder.attention_layer(encoder_out_new, h) # (beam_index, encoder_dim)
+            alpha = alpha.view(-1, enc_image_size, enc_image_size)  # (beam_index, enc_image_size, enc_image_size)
+            
+            gate = decoder.sigmoid(decoder.f_beta(h))  # gating scalar, (s, encoder_dim)
+            #print('gate.shape: ', gate.shape)
+            #print('attention_weighted_encoding.shape: ', attention_weighted_encoding.shape)
+            attention_weighted_encoding = gate * attention_weighted_encoding.squeeze(1)
+            
+            #print('embeddings.shape: ', embeddings.shape)
+            #print('attention_weighted_encoding.shape: ', attention_weighted_encoding.shape)
+            #print('embeddings + attention_weighted_encoding: ', torch.cat([embeddings, attention_weighted_encoding], dim=1).shape)
+            #print('h.shape: ', h.shape)
+            #print('c.shape: ', c.shape)
+            h, c = decoder.lstm_layer(torch.cat([embeddings, attention_weighted_encoding.squeeze(1)], dim=1), (h, c))  # (beam_index, decoder_dim)
+            preds = decoder.linear_fc_layer(h)
+            
+            preds = F.log_softmax(preds, dim=1)
+
+            scores = top_beam_index_scores.expand_as(preds) + preds  # (beam_index, vocab_size)
+
+            # For the first step, all k points will have the same scores (since same k previous words, h, c)
+            if step == 1:
+                top_beam_index_scores, top_beam_index_words = torch.topk(scores[0], beam_index, 0, True, True)  # (beam_index)
+                prev_word_inds = top_beam_index_words / vocab_size  # (beam_index)
+                next_word_inds = top_beam_index_words % vocab_size  # (beam_index)
+            else:
+                # Unroll and find top scores, and their unrolled indices
+                top_beam_index_scores, top_beam_index_words = torch.topk(scores.view(-1), beam_index, 0, True, True)  # (beam_index)
+                prev_word_inds = next_word_inds #top_beam_index_words / vocab_size  # (beam_index)
+                next_word_inds = top_beam_index_words % vocab_size  # (beam_index)
+
+            # Convert unrolled indices to actual indices of scores
+            #prev_word_inds = next_word_inds #top_beam_index_words / vocab_size  # (beam_index)
+            #next_word_inds = top_beam_index_words % vocab_size  # (beam_index)
+            #print('top_beam_index_words: ', top_beam_index_words)
+            #print('prev_word_inds: ', prev_word_inds)
+            #print('next_word_inds: ', next_word_inds)
+            
+            # Which sequences are incomplete (didn't reach <end>)?
+            '''print('end: ', end)
+            gen = (count for count,ele in enumerate(next_word_inds) if ele != end)
+            for count in gen:
+                print('count: ', count)
+            gen = (ele for count,ele in enumerate(next_word_inds) if ele != end)
+            for ele in gen:
+                print('ele: ', ele)'''
+            #print('enumerate(next_word_inds): ', list(enumerate(next_word_inds)))
+            incomplete_inds = [ind for ind, next_word in enumerate(next_word_inds) if next_word != end]
+            complete_inds = list(set(range(len(next_word_inds))) - set(incomplete_inds))
+            #print('incomplete_inds: ', incomplete_inds)
+            #print('complete_inds: ', complete_inds)
+
+            # Add new words to sequences, alphas
+            #print('prev_word_inds: ', prev_word_inds)
+            #print('next_word_inds: ', next_word_inds)
+            #print('seqs.shape: ', seqs.shape)
+            #print('seqs: ', seqs)
+            #print('seqs[prev_word_inds].shape: ', seqs[prev_word_inds].shape)
+            #print('next_word_inds.unsqueeze(1).shape: ', next_word_inds.unsqueeze(1).shape)
+            #seqs = torch.cat([seqs[prev_word_inds], next_word_inds.unsqueeze(1)], dim=1)  # (beam_index, step+1)
+            seqs = torch.cat([seqs, next_word_inds.unsqueeze(1)], dim=1)  # (beam_index, step+1)
+            print('seqs.shape: ', seqs.shape)
+            print('seqs: ', seqs)
+            #print('seqs_alpha.shape: ', seqs_alpha.shape)
+            #print('alpha[prev_word_inds].unsqueeze(1).shape: ', alpha[prev_word_inds].unsqueeze(1).shape)
+            #seqs_alpha = torch.cat([seqs_alpha[prev_word_inds], alpha[prev_word_inds].unsqueeze(1)], dim=1)  # (beam_index, step+1, enc_image_size, enc_image_size)
+            
+            #print('seqs_alpha.shape: ', seqs_alpha.shape)
+            #print('prev_word_inds: ', prev_word_inds)
+            #print('alpha.unsqueeze(1).shape: ', alpha.unsqueeze(1).shape)
+            #print('torch.cat([seqs_alpha, alpha.unsqueeze(1)], dim=1).shape: ', torch.cat([seqs_alpha, alpha.unsqueeze(1)], dim=1).shape)
+            #seqs_alpha = torch.cat([seqs_alpha, alpha[prev_word_inds].unsqueeze(1)], dim=1)  # (beam_index, step+1, enc_image_size, enc_image_size)
+
+            #print('seqs: ', seqs)
+            #seqs = seqs[incomplete_inds]
+            #seqs_alpha = seqs_alpha[incomplete_inds]
+            #h = h[prev_word_inds[incomplete_inds]]
+            #c = c[prev_word_inds[incomplete_inds]]
+            #encoder_out = encoder_out[prev_word_inds[incomplete_inds]]
+            top_beam_index_scores = top_beam_index_scores.unsqueeze(1)
+            beam_index_prev_words = next_word_inds.unsqueeze(1)
+            
+            # Set aside complete sequences
+            if len(complete_inds) > 0:
+                complete_seqs.extend(seqs[complete_inds].tolist())
+                #complete_seqs_alpha.extend(seqs_alpha[complete_inds].tolist())
+                complete_seqs_scores.extend(top_beam_index_scores[complete_inds])
+            beam_index -= len(complete_inds)  # reduce beam length accordingly
+            
+            # Proceed with incomplete sequences
+            if beam_index == 0:
+                break
+
+            # Break if things have been going on too long
+            if step > 50:
+                complete_seqs.extend(seqs.tolist())
+                #complete_seqs_alpha.extend(seqs_alpha[complete_inds].tolist())
+                complete_seqs_scores.extend(top_beam_index_scores)
+                break
+            step += 1
+
+        print('complete_seqs_scores: ', complete_seqs_scores)
+        i = complete_seqs_scores.index(max(complete_seqs_scores))
+        seq = complete_seqs[i]
+        #alphas = complete_seqs_alpha[i]
+
+        return seq #, alphas

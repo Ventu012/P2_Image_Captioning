@@ -20,7 +20,7 @@ def get_loader(transform,
                unk_word="<unk>",
                vocab_from_file=True,
                num_workers=0,
-               cocoapi_loc='\data'):
+               cocoapi_loc='data'):
     """Returns the data loader.
     Args:
       transform: Image transform.
@@ -43,16 +43,17 @@ def get_loader(transform,
     # Based on mode (train, val, test), obtain img_folder and annotations_file.
     if mode == 'train':
         if vocab_from_file==True: assert os.path.exists(vocab_file), "vocab_file does not exist.  Change vocab_from_file to False to create vocab_file."
-        img_folder = os.path.join(cocoapi_loc, 'images\train2014\')
+        
+        img_folder = os.path.join(cocoapi_loc, 'images/train2014')
         # annotations_file = os.path.join(cocoapi_loc, 'annotations\captions_train2014.json')
-        annotations_file = '\data\annotations\captions_train2014.json'
+        annotations_file = 'data/annotations/captions_train2014.json'
     if mode == 'test':
         assert batch_size==1, "Please change batch_size to 1 if testing your model."
         assert os.path.exists(vocab_file), "Must first generate vocab.pkl from training data."
         assert vocab_from_file==True, "Change vocab_from_file to True."
-        img_folder = os.path.join(cocoapi_loc, 'images\test2014\')
+        img_folder = os.path.join(cocoapi_loc, 'images/test2014')
         # annotations_file = os.path.join(cocoapi_loc, '\annotations\image_info_test2014.json')
-        annotations_file = '\data\annotations\image_info_test2014.json'
+        annotations_file = 'data/annotations/image_info_test2014.json'
 
     print('annotations_file: ', annotations_file)
     print('vocab_from_file: ', vocab_from_file)
@@ -96,8 +97,7 @@ class CoCoDataset(data.Dataset):
         self.transform = transform
         self.mode = mode
         self.batch_size = batch_size
-        self.vocab = Vocabulary(vocab_threshold, vocab_file, start_word,
-            end_word, unk_word, annotations_file, vocab_from_file)
+        self.vocab = Vocabulary(vocab_threshold, vocab_file, start_word, end_word, unk_word, annotations_file, vocab_from_file)
         self.img_folder = img_folder
         if self.mode == 'train':
             self.coco = COCO(annotations_file)
